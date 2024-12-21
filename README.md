@@ -5,7 +5,7 @@ Useful Information is a compilation of code snippets, reference materials, and r
 
 **References**
 
-[React] (react/README.md)
+[React](react/README.md)
 
-[Mermaid] (mermaid/README.md)
+[Mermaid](mermaid/README.md)
 
