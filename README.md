@@ -8,4 +8,3 @@ Useful Information is a compilation of code snippets, reference materials, and r
 [React](react/README.md)
 
 [Mermaid](mermaid/README.md)
-git 
