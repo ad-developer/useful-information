@@ -74,11 +74,20 @@ git pull
 ```
 Fetches and merges changes from the remote repository.
 
-### 13. Delete a Branch
+### 13. Fetch a Branch
+```sh
+git fetch <branch_name>
+```
+Fetch the specified branch.
+
+
+### 14. Delete a Branch
 ```sh
 git branch -d <branch_name>
 ```
 Deletes the specified branch.
+
+
 
 ## Additional Resources
 - [Official Git Documentation](https://git-scm.com/doc)
