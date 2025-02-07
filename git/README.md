@@ -88,6 +88,18 @@ git branch -d <branch_name>
 Deletes the specified branch.
 
 
+### 15. Merge `main` into a Feature Branch
+```sh
+git checkout <feature-branch-name>
+git fetch origin
+git merge origin/main 
+or
+git merge main
+git commit -m "Merge main into feature branch"
+git push origin feature-branch-name 
+```
+Switches to the feature branch and merges the `main` branch into it.
+
 
 ## Additional Resources
 - [Official Git Documentation](https://git-scm.com/doc)
