@@ -1,113 +1,169 @@
 #!/usr/bin/env python3
-import json
-import yaml
 import argparse
+import json
 import os
+import tempfile
 import subprocess
 from pathlib import Path
 
-def clone_repo(repo_url: str, dest: Path):
-    """Clone or update a git repository."""
-    if dest.exists():
-        print(f"✅ Repo already exists at {dest}, pulling latest changes...")
-        subprocess.run(["git", "-C", str(dest), "pull"], check=True)
-    else:
-        print(f"📦 Cloning {repo_url} into {dest}")
-        subprocess.run(["git", "clone", repo_url, str(dest)], check=True)
 
-def load_json_file(path: Path):
-    """Load JSON content from file."""
-    with open(path, "r", encoding="utf-8") as f:
+def clone_repo(repo_url: str, branch: str = "main") -> str:
+    """Clone a Git repository into a temporary directory."""
+    tmp_dir = tempfile.mkdtemp()
+    subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_dir], check=True)
+    return tmp_dir
+
+
+def load_json(file_path: str) -> dict:
+    with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def load_yaml_file(path: Path):
-    """Load YAML content from file."""
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
-def flatten_json(data, parent_key='', sep='__'):
-    """Recursively flatten a nested dictionary using separator (default '__')."""
-    items = {}
-    for k, v in data.items():
+# ------------------------------
+# Minimal YAML parser
+# ------------------------------
+def parse_simple_yaml(content: str) -> dict:
+    """
+    Parse a very basic YAML structure into a dictionary.
+    Supports nested levels via indentation (2 or 4 spaces).
+    Does not support lists or complex types.
+    """
+    result = {}
+    stack = [(0, result)]
+
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.strip().startswith("#"):
+            continue
+
+        indent = len(line) - len(line.lstrip(" "))
+        key, sep, value = line.strip().partition(":")
+        key = key.strip()
+        value = value.strip()
+
+        # Walk back indentation stack if needed
+        while stack and indent < stack[-1][0]:
+            stack.pop()
+
+        parent = stack[-1][1]
+
+        if value == "":
+            # New nested section
+            parent[key] = {}
+            stack.append((indent + 2, parent[key]))
+        else:
+            # Convert numeric/bool values
+            if value.lower() in ("true", "false"):
+                parent[key] = value.lower() == "true"
+            elif value.isdigit():
+                parent[key] = int(value)
+            else:
+                parent[key] = value.strip('"').strip("'")
+
+    return result
+
+
+def load_yaml(file_path: str, values_key: str = "values") -> dict:
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        yaml_dict = parse_simple_yaml(content)
+
+    # Support dotted keys like values.group_one.group_two
+    target = yaml_dict
+    if values_key:
+        for part in values_key.split("."):
+            if part in target and isinstance(target[part], dict):
+                target = target[part]
+            else:
+                # If the path doesn’t exist, return whole file
+                return yaml_dict
+    return target
+
+
+def flatten_json(d, parent_key='', sep='__'):
+    """Flatten nested JSON-like dict into key paths separated by '__'."""
+    items = []
+    for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
         if isinstance(v, dict):
-            items.update(flatten_json(v, new_key, sep=sep))
+            items.extend(flatten_json(v, new_key, sep=sep).items())
         else:
-            items[new_key] = v
-    return items
+            items.append((new_key, v))
+    return dict(items)
 
-def compare_configs(json_data, yaml_data):
-    """Compare flattened JSON vs YAML data and return missing/mismatched keys."""
-    json_flat = flatten_json(json_data)
-    yaml_flat = flatten_json(yaml_data)
-    results = {"missing_in_yaml": [], "missing_in_json": [], "mismatched": []}
 
-    for key, jval in json_flat.items():
-        yval = yaml_flat.get(key)
-        if yval is None:
-            results["missing_in_yaml"].append(key)
-        elif str(jval) != str(yval):
-            results["mismatched"].append((key, jval, yval))
+def compare_dicts(json_flat: dict, yaml_flat: dict):
+    """Compare flattened dictionaries and print differences."""
+    json_keys = set(json_flat.keys())
+    yaml_keys = set(yaml_flat.keys())
 
-    for key in yaml_flat:
-        if key not in json_flat:
-            results["missing_in_json"].append(key)
+    only_in_json = json_keys - yaml_keys
+    only_in_yaml = yaml_keys - json_keys
+    mismatched_values = {k: (json_flat[k], yaml_flat[k]) for k in json_keys & yaml_keys if str(json_flat[k]) != str(yaml_flat[k])}
 
-    return results
+    print("\n🔍 Comparison Results:")
+    if only_in_json:
+        print("\n❌ Keys only in JSON:")
+        for k in sorted(only_in_json):
+            print(f"  - {k}: {json_flat[k]}")
 
-def print_results(results):
-    """Display comparison results in a readable format."""
-    if results["missing_in_yaml"]:
-        print("\n❌ Missing in YAML (under 'values:'):")
-        for key in results["missing_in_yaml"]:
-            print(f"  - {key}")
+    if only_in_yaml:
+        print("\n❌ Keys only in YAML:")
+        for k in sorted(only_in_yaml):
+            print(f"  - {k}: {yaml_flat[k]}")
 
-    if results["missing_in_json"]:
-        print("\n❌ Missing in JSON:")
-        for key in results["missing_in_json"]:
-            print(f"  - {key}")
+    if mismatched_values:
+        print("\n⚠️ Keys with mismatched values:")
+        for k, (jv, yv) in mismatched_values.items():
+            print(f"  - {k}: JSON={jv}, YAML={yv}")
 
-    if results["mismatched"]:
-        print("\n⚠️ Mismatched values:")
-        for key, jval, yval in results["mismatched"]:
-            print(f"  - {key}: JSON={jval} | YAML={yval}")
+    if not any([only_in_json, only_in_yaml, mismatched_values]):
+        print("\n✅ All keys and values match!")
 
-    if not any(results.values()):
-        print("\n✅ All variables match!")
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare appsettings.json and values.yaml between repositories.")
-    parser.add_argument("--json-repo", required=True, help="Git URL of repo containing appsettings.json")
-    parser.add_argument("--json-path", required=True, help="Path to appsettings.json inside the repo")
-    parser.add_argument("--yaml-repo", required=True, help="Git URL of repo containing YAML file")
-    parser.add_argument("--yaml-path", required=True, help="Path to values.yaml inside the repo")
-    parser.add_argument("--workdir", default="repos", help="Directory to clone repositories into")
+    parser = argparse.ArgumentParser(description="Compare appsettings.json and values.yaml across repositories or local files (no external dependencies).")
+    parser.add_argument("--json-repo", help="Git repository containing appsettings.json")
+    parser.add_argument("--yaml-repo", help="Git repository containing values.yaml")
+    parser.add_argument("--json-path", help="Path to appsettings.json (local or within repo)", default="appsettings.json")
+    parser.add_argument("--yaml-path", help="Path to values.yaml (local or within repo)", default="values.yaml")
+    parser.add_argument("--json-local", help="Local path to appsettings.json (overrides repo)")
+    parser.add_argument("--yaml-local", help="Local path to values.yaml (overrides repo)")
+    parser.add_argument("--yaml-values-key", help="YAML section name (e.g., 'values' or 'group_one.group_two')", default="values")
+    parser.add_argument("--branch", help="Branch to use when cloning repos", default="main")
 
     args = parser.parse_args()
-    base_dir = Path(args.workdir)
-    base_dir.mkdir(exist_ok=True)
 
-    json_repo_dir = base_dir / "json_repo"
-    yaml_repo_dir = base_dir / "yaml_repo"
+    try:
+        # JSON source
+        if args.json_local:
+            json_path = args.json_local
+        elif args.json_repo:
+            repo_dir = clone_repo(args.json_repo, args.branch)
+            json_path = os.path.join(repo_dir, args.json_path)
+        else:
+            raise ValueError("Either --json-repo or --json-local must be specified.")
 
-    clone_repo(args.json_repo, json_repo_dir)
-    clone_repo(args.yaml_repo, yaml_repo_dir)
+        # YAML source
+        if args.yaml_local:
+            yaml_path = args.yaml_local
+        elif args.yaml_repo:
+            repo_dir = clone_repo(args.yaml_repo, args.branch)
+            yaml_path = os.path.join(repo_dir, args.yaml_path)
+        else:
+            raise ValueError("Either --yaml-repo or --yaml-local must be specified.")
 
-    json_file = json_repo_dir / args.json_path
-    yaml_file = yaml_repo_dir / args.yaml_path
+        json_data = load_json(json_path)
+        yaml_data = load_yaml(yaml_path, values_key=args.yaml_values_key)
 
-    json_data = load_json_file(json_file)
-    yaml_full = load_yaml_file(yaml_file)
+        json_flat = flatten_json(json_data)
+        yaml_flat = flatten_json(yaml_data)
 
-    # Extract only the 'values:' section from YAML
-    if "values" not in yaml_full or not isinstance(yaml_full["values"], dict):
-        print(f"⚠️ Warning: No 'values:' section found in {yaml_file}")
-        yaml_data = {}
-    else:
-        yaml_data = yaml_full["values"]
+        compare_dicts(json_flat, yaml_flat)
 
-    results = compare_configs(json_data, yaml_data)
-    print_results(results)
+    except Exception as e:
+        print(f"❗Error: {e}")
+
 
 if __name__ == "__main__":
     main()
