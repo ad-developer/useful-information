@@ -53,7 +53,7 @@ erDiagram
     CUSTOMER }|..|{ DELIVERY-ADDRESS : uses
 ```
 
-## C4 Diagram 
+## C4 diagram 
 
 ```mermaid
 flowchart TB
