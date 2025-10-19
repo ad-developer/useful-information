@@ -9,3 +9,4 @@ Useful Information is a compilation of code snippets, reference materials, and r
 - [Mermaid](mermaid/README.md)
 - [DevOps](devops/README.md)
 - [Git](git/README.md)
+- [compare-configs](compare-configs/README.md)
