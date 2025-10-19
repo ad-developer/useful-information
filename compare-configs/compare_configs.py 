@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+import json
+import yaml
+import argparse
+import os
+import subprocess
+from pathlib import Path
+
+def clone_repo(repo_url: str, dest: Path):
+    """Clone or update a git repository."""
+    if dest.exists():
+        print(f"✅ Repo already exists at {dest}, pulling latest changes...")
+        subprocess.run(["git", "-C", str(dest), "pull"], check=True)
+    else:
+        print(f"📦 Cloning {repo_url} into {dest}")
+        subprocess.run(["git", "clone", repo_url, str(dest)], check=True)
+
+def load_json_file(path: Path):
+    """Load JSON content from file."""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def load_yaml_file(path: Path):
+    """Load YAML content from file."""
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+def flatten_json(data, parent_key='', sep='__'):
+    """Recursively flatten a nested dictionary using separator (default '__')."""
+    items = {}
+    for k, v in data.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_json(v, new_key, sep=sep))
+        else:
+            items[new_key] = v
+    return items
+
+def compare_configs(json_data, yaml_data):
+    """Compare flattened JSON vs YAML data and return missing/mismatched keys."""
+    json_flat = flatten_json(json_data)
+    yaml_flat = flatten_json(yaml_data)
+    results = {"missing_in_yaml": [], "missing_in_json": [], "mismatched": []}
+
+    for key, jval in json_flat.items():
+        yval = yaml_flat.get(key)
+        if yval is None:
+            results["missing_in_yaml"].append(key)
+        elif str(jval) != str(yval):
+            results["mismatched"].append((key, jval, yval))
+
+    for key in yaml_flat:
+        if key not in json_flat:
+            results["missing_in_json"].append(key)
+
+    return results
+
+def print_results(results):
+    """Display comparison results in a readable format."""
+    if results["missing_in_yaml"]:
+        print("\n❌ Missing in YAML (under 'values:'):")
+        for key in results["missing_in_yaml"]:
+            print(f"  - {key}")
+
+    if results["missing_in_json"]:
+        print("\n❌ Missing in JSON:")
+        for key in results["missing_in_json"]:
+            print(f"  - {key}")
+
+    if results["mismatched"]:
+        print("\n⚠️ Mismatched values:")
+        for key, jval, yval in results["mismatched"]:
+            print(f"  - {key}: JSON={jval} | YAML={yval}")
+
+    if not any(results.values()):
+        print("\n✅ All variables match!")
+
+def main():
+    parser = argparse.ArgumentParser(description="Compare appsettings.json and values.yaml between repositories.")
+    parser.add_argument("--json-repo", required=True, help="Git URL of repo containing appsettings.json")
+    parser.add_argument("--json-path", required=True, help="Path to appsettings.json inside the repo")
+    parser.add_argument("--yaml-repo", required=True, help="Git URL of repo containing YAML file")
+    parser.add_argument("--yaml-path", required=True, help="Path to values.yaml inside the repo")
+    parser.add_argument("--workdir", default="repos", help="Directory to clone repositories into")
+
+    args = parser.parse_args()
+    base_dir = Path(args.workdir)
+    base_dir.mkdir(exist_ok=True)
+
+    json_repo_dir = base_dir / "json_repo"
+    yaml_repo_dir = base_dir / "yaml_repo"
+
+    clone_repo(args.json_repo, json_repo_dir)
+    clone_repo(args.yaml_repo, yaml_repo_dir)
+
+    json_file = json_repo_dir / args.json_path
+    yaml_file = yaml_repo_dir / args.yaml_path
+
+    json_data = load_json_file(json_file)
+    yaml_full = load_yaml_file(yaml_file)
+
+    # Extract only the 'values:' section from YAML
+    if "values" not in yaml_full or not isinstance(yaml_full["values"], dict):
+        print(f"⚠️ Warning: No 'values:' section found in {yaml_file}")
+        yaml_data = {}
+    else:
+        yaml_data = yaml_full["values"]
+
+    results = compare_configs(json_data, yaml_data)
+    print_results(results)
+
+if __name__ == "__main__":
+    main()
